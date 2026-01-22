@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-
+from fastapi import Request
 from webhook_server import router as webhook_router
 
 app = FastAPI(
@@ -20,3 +20,8 @@ def hello_world():
 @app.get("/sre/health")
 def health_check():
     return {"status": "healthy"}
+
+@app.post("/sre/webhook/sentry")
+def sentry_webhook(request: Request):
+    print(str(request.body))
+    return {"message": "Sentry webhook received", "request": request}
