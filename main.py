@@ -22,6 +22,7 @@ def health_check():
     return {"status": "healthy"}
 
 @app.post("/sre/webhook/sentry")
-def sentry_webhook(request: Request):
-    print(str(request.body))
-    return {"message": "Sentry webhook received", "request": request}
+async def sentry_webhook(request: Request):
+    body = await request.body()
+    print(body)
+    return {"message": "Sentry webhook received at simple endpoint"}

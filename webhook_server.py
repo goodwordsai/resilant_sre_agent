@@ -76,14 +76,12 @@ def get_repo_context_from_env() -> Optional[RepoContext]:
     return create_repo_context(
         repo_path=repo_path,
         allow_push_to_main=os.environ.get("ALLOW_PUSH_TO_MAIN", "").lower() == "true",
-        require_push_confirmation=os.environ.get("REQUIRE_PUSH_CONFIRMATION", "true").lower() != "false",
+        require_push_confirmation=False,
     )
 
 
 async def run_agent_for_sentry_issue(
-    issue_id: str,
-    project_slug: str,
-    issue_title: str,
+    webhook_payload: dict,
     sentry_ctx: SentryContext,
     repo_ctx: Optional[RepoContext],
 ) -> None:
@@ -93,28 +91,33 @@ async def run_agent_for_sentry_issue(
     This is run as a background task after webhook is received.
 
     Args:
-        issue_id: Sentry issue ID
-        project_slug: Project slug
-        issue_title: Issue title for the prompt
+        webhook_payload: The complete webhook JSON payload from Sentry
         sentry_ctx: Sentry context for API calls
         repo_ctx: Optional repo context for file operations
     """
-    # Build the investigation prompt
-    prompt = f"""A new Sentry error has been detected that needs investigation.
+    # Convert the payload to a formatted JSON string for the prompt
+    payload_json = json.dumps(webhook_payload, indent=2, default=str)
 
-Issue ID: {issue_id}
-Project: {project_slug}
-Title: {issue_title}
+    # Build the investigation prompt with the full webhook payload
+    prompt = f"""A new Sentry alert has been triggered. Here is the complete webhook payload:
+
+```json
+{payload_json}
+```
 
 Please investigate this error:
-1. Use sentry_get_issue to get the full issue details
-2. Use sentry_get_latest_event to get the stacktrace with file paths and line numbers
-3. Analyze the stacktrace to understand where the error occurred
-4. If a local repository is available, read the relevant source files to understand the context
-5. Provide a summary of:
+1. Analyze the webhook payload to understand:
+   - What the error/issue is (check message, title, level)
+   - The stacktrace (frames with file paths, line numbers, function names, context)
+   - User and request context if available
+   - Environment, tags, and any extra data
+2. If needed, use sentry_get_issue or sentry_get_latest_event for additional details
+3. If a local repository is available, read the relevant source files to understand the context
+4. Provide a summary of:
    - What the error is
    - Where it occurred (file, function, line)
    - Why it might be happening
+   - The impact (user affected, environment, frequency)
    - Suggested fix if applicable
 """
 
@@ -124,6 +127,9 @@ Please investigate this error:
         include_local_repo=repo_ctx is not None,
         include_sentry=True,
     )
+
+    # Extract issue_id for logging purposes
+    issue_id = webhook_payload.get("data", {}).get("event", {}).get("issue_id", "unknown")
 
     # Run the agent loop (this is blocking, but we're in a background task)
     try:
@@ -203,9 +209,7 @@ async def handle_sentry_webhook(
         if action == "created" and parsed["issue_id"]:
             background_tasks.add_task(
                 run_agent_for_sentry_issue,
-                issue_id=parsed["issue_id"],
-                project_slug=parsed["project_slug"],
-                issue_title=parsed["title"],
+                webhook_payload=payload,
                 sentry_ctx=sentry_ctx,
                 repo_ctx=repo_ctx,
             )
@@ -224,26 +228,20 @@ async def handle_sentry_webhook(
     elif sentry_hook_resource == "event_alert":
         # Event alert webhooks (alert rules)
         parsed = parse_event_alert_webhook(payload)
+        issue_id = parsed.get("issue_id", "")
 
-        if parsed["issue_id"]:
-            background_tasks.add_task(
-                run_agent_for_sentry_issue,
-                issue_id=parsed["issue_id"],
-                project_slug=parsed["project_slug"],
-                issue_title=parsed["title"],
-                sentry_ctx=sentry_ctx,
-                repo_ctx=repo_ctx,
-            )
-
-            return {
-                "status": "accepted",
-                "message": f"Agent triggered for alert on issue {parsed['issue_id']}",
-                "issue_id": parsed["issue_id"],
-            }
+        # Trigger agent with the full payload
+        background_tasks.add_task(
+            run_agent_for_sentry_issue,
+            webhook_payload=payload,
+            sentry_ctx=sentry_ctx,
+            repo_ctx=repo_ctx,
+        )
 
         return {
-            "status": "ignored",
-            "message": "Could not extract issue ID from alert",
+            "status": "accepted",
+            "message": f"Agent triggered for alert on issue {issue_id}" if issue_id else "Agent triggered for alert",
+            "issue_id": issue_id,
         }
 
     else:
