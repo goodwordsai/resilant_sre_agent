@@ -8,15 +8,15 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Include webhook routes
-app.include_router(webhook_router)
+# Include webhook routes with /sre prefix
+app.include_router(webhook_router, prefix="/sre")
 
 
-@app.get("/")
+@app.get("/sre")
 def hello_world():
-    return {"message": "Hello, World!"}
+    return {"message": "Hello, World from SRE Agent!"}
 
 
-@app.get("/health")
+@app.get("/sre/health")
 def health_check():
     return {"status": "healthy"}
